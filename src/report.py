@@ -67,6 +67,17 @@ def export_to_excel(df, filename="Mutual_Fund_Rankings.xlsx"):
             ]
             top_3_all[top3_cols].to_excel(writer, sheet_name="Top 3 By Category", index=False)
 
+        # All Rankable Scores (Complete list of scored funds)
+        rankable_funds = df[df['rankable'] == True].copy()
+        if not rankable_funds.empty:
+            rankable_funds.rename(columns={'category_rank': 'Rank', 'scheme_name': 'Mutual Fund Name', 'category': 'Category'}, inplace=True)
+            all_scores_cols = [
+                'Rank', 'Mutual Fund Name', 'Category', 'overall_score',
+                'sharpe_score', 'sortino_score', 'up_cap_score', 'down_cap_score', 'rolling_score',
+                'aum', 'expense_ratio', 'fund_age'
+            ]
+            rankable_funds[all_scores_cols].to_excel(writer, sheet_name="All Rankable Scores", index=False)
+
         # Detailed Raw Metrics for ALL funds
         raw_cols = [
             'scheme_code', 'scheme_name', 'category', 'rankable',

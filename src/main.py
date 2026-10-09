@@ -13,6 +13,8 @@ def main():
     parser.add_argument('--subset-limit', type=int, default=None, help="Limit funds per category for testing")
     parser.add_argument('--category', type=str, default=None, help="Filter by specific category")
     parser.add_argument('--month-end', action='store_true', help="Lock evaluation date to previous month-end")
+    parser.add_argument('--metric', type=str, default="All", help="Filter metric: All, Sharpe, Sortino, Up Capture, Down Capture, Rolling Returns")
+    parser.add_argument('--timeframe', type=str, default="All", help="Filter timeframe: All, 1y, 3y, 5y")
     args = parser.parse_args()
 
     # 1. Fetch Funds
@@ -159,7 +161,7 @@ def main():
 
     # 3. Score
     df_results = pd.DataFrame(results)
-    scored_df = apply_scoring(df_results)
+    scored_df = apply_scoring(df_results, metric_filter=args.metric, timeframe_filter=args.timeframe)
 
     # 4. Export
     export_to_excel(scored_df)

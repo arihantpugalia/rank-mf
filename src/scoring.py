@@ -31,29 +31,49 @@ def calculate_percentiles_within_category(df, col_name, ascending=True):
 
     return df
 
-def apply_scoring(df):
+def apply_scoring(df, metric_filter="All", timeframe_filter="All"):
     """
-    Applies the full scoring architecture based on the rules.
+    Applies scoring logic dynamically based on selected metric and timeframe filters.
+    metric_filter: "All" or comma-separated list like "Sharpe,Rolling Returns"
+    timeframe_filter: "All" or comma-separated list like "1y,3y"
     """
-    # 1. Ensure we only score funds that have all 15 metrics
-    # List of 15 metric columns
-    metrics = [
-        'sharpe_1y', 'sharpe_3y', 'sharpe_5y',
-        'sortino_1y', 'sortino_3y', 'sortino_5y',
-        'up_cap_1y', 'up_cap_3y', 'up_cap_5y',
-        'down_cap_1y', 'down_cap_3y', 'down_cap_5y',
-        'median_roll_1y', 'median_roll_3y', 'median_roll_5y'
-    ]
+    all_metrics = {
+        'Sharpe': ['sharpe_1y', 'sharpe_3y', 'sharpe_5y'],
+        'Sortino': ['sortino_1y', 'sortino_3y', 'sortino_5y'],
+        'Up Capture': ['up_cap_1y', 'up_cap_3y', 'up_cap_5y'],
+        'Down Capture': ['down_cap_1y', 'down_cap_3y', 'down_cap_5y'],
+        'Rolling Returns': ['median_roll_1y', 'median_roll_3y', 'median_roll_5y']
+    }
 
-    # Add a 'rankable' flag
-    df['rankable'] = df[metrics].notna().all(axis=1)
+    # Parse filters
+    if metric_filter == "All" or not metric_filter:
+        selected_families = list(all_metrics.keys())
+    else:
+        selected_families = [m.strip() for m in metric_filter.split(',')]
 
-    # 2. Iterate through categories and rank. We only rank 'rankable' funds
-    # However we can calculate percentiles anyway, just ignoring NaNs
-    # Metrics where higher is better
-    higher_is_better = [m for m in metrics if not 'down_cap' in m]
-    # Metrics where lower is better
-    lower_is_better = [m for m in metrics if 'down_cap' in m]
+    if timeframe_filter == "All" or not timeframe_filter:
+        selected_timeframes = ['1y', '3y', '5y']
+    else:
+        selected_timeframes = [t.strip() for t in timeframe_filter.split(',')]
+
+    active_metrics = []
+
+    # Identify which raw columns are required based on filters
+    for family in selected_families:
+        if family in all_metrics:
+            for col in all_metrics[family]:
+                # Check if this column matches any selected timeframe
+                if any(tf in col for tf in selected_timeframes):
+                    active_metrics.append(col)
+
+    # 1. Ensure rankability dynamically (funds only need history for the ACTIVE metrics!)
+    df['rankable'] = df[active_metrics].notna().all(axis=1)
+
+    # 2. Iterate through categories and calculate percentiles for ALL possible metrics initially
+    # (so raw metrics sheets still have rich data). But only rankable impacts final.
+    flat_metrics = [m for sublist in all_metrics.values() for m in sublist]
+    higher_is_better = [m for m in flat_metrics if not 'down_cap' in m]
+    lower_is_better = [m for m in flat_metrics if 'down_cap' in m]
 
     for m in higher_is_better:
         df = calculate_percentiles_within_category(df, m, ascending=True)
@@ -61,28 +81,47 @@ def apply_scoring(df):
     for m in lower_is_better:
         df = calculate_percentiles_within_category(df, m, ascending=False)
 
-    # 3. Calculate family scores (average of 1Y, 3Y, 5Y percentiles per family)
-    df['sharpe_score'] = df[['sharpe_1y_score', 'sharpe_3y_score', 'sharpe_5y_score']].mean(axis=1)
-    df['sortino_score'] = df[['sortino_1y_score', 'sortino_3y_score', 'sortino_5y_score']].mean(axis=1)
-    df['up_cap_score'] = df[['up_cap_1y_score', 'up_cap_3y_score', 'up_cap_5y_score']].mean(axis=1)
-    df['down_cap_score'] = df[['down_cap_1y_score', 'down_cap_3y_score', 'down_cap_5y_score']].mean(axis=1)
-    df['rolling_score'] = df[['median_roll_1y_score', 'median_roll_3y_score', 'median_roll_5y_score']].mean(axis=1)
+    # 3. Calculate family scores dynamically based ONLY on the active timeframe
+    def get_active_score_cols(family_name):
+        if family_name not in all_metrics:
+            return []
+        return [c + "_score" for c in all_metrics[family_name] if c in active_metrics]
 
-    # 4. Overall Score
-    df['overall_score'] = (
-        df['sharpe_score'] * 0.20 +
-        df['sortino_score'] * 0.20 +
-        df['up_cap_score'] * 0.20 +
-        df['down_cap_score'] * 0.20 +
-        df['rolling_score'] * 0.20
-    )
+    sharpe_cols = get_active_score_cols('Sharpe')
+    sortino_cols = get_active_score_cols('Sortino')
+    up_cols = get_active_score_cols('Up Capture')
+    down_cols = get_active_score_cols('Down Capture')
+    roll_cols = get_active_score_cols('Rolling Returns')
+
+    # Mean of available/active timeframes
+    df['sharpe_score'] = df[sharpe_cols].mean(axis=1) if sharpe_cols else np.nan
+    df['sortino_score'] = df[sortino_cols].mean(axis=1) if sortino_cols else np.nan
+    df['up_cap_score'] = df[up_cols].mean(axis=1) if up_cols else np.nan
+    df['down_cap_score'] = df[down_cols].mean(axis=1) if down_cols else np.nan
+    df['rolling_score'] = df[roll_cols].mean(axis=1) if roll_cols else np.nan
+
+    # 4. Calculate Overall Score dynamically (only include families that have active metrics)
+    active_family_scores = []
+    for family in selected_families:
+        if family == 'Sharpe' and sharpe_cols:
+            active_family_scores.append('sharpe_score')
+        elif family == 'Sortino' and sortino_cols:
+            active_family_scores.append('sortino_score')
+        elif family == 'Up Capture' and up_cols:
+            active_family_scores.append('up_cap_score')
+        elif family == 'Down Capture' and down_cols:
+            active_family_scores.append('down_cap_score')
+        elif family == 'Rolling Returns' and roll_cols:
+            active_family_scores.append('rolling_score')
+
+    df['overall_score'] = df[active_family_scores].mean(axis=1)
 
     # Nullify overall score for non-rankable funds
     df.loc[~df['rankable'], 'overall_score'] = np.nan
 
     # 5. Ranking and Tie-breakers
-    # Sort logically
-    # Category, Overall Score (desc), 5Y Sortino (desc), 5Y Sharpe (desc), 5Y Roll (desc), 5Y Down Cap (asc - handled by score), 5Y Up Cap (desc)
+    # Using existing logic:
+    # If 5Y exists we tie break on it, otherwise standard overall score wins
     df.sort_values(by=[
         'category',
         'overall_score',
